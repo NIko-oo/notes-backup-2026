@@ -1,7 +1,7 @@
 /*!
  * @name 聚合音源-多接口自动切换
- * @description 聚合多个实测可用的公益接口，按优先级自动切换、失败回退。支持 QQ/网易云/酷我/酷狗（酷狗双接口互备）。启动时异步自检版本，有新版弹更新提醒。接口配置集中在下方 APIS 与 CHAINS，可自行增删排序。
- * @version 1.2.0
+ * @description 聚合多个实测可用的公益接口，按优先级自动切换、失败回退。支持 QQ/网易云/酷我/酷狗。v1.3 新增 zddyr 全平台备用与酷我官方 mobi 接口。启动时异步自检版本，有新版弹更新提醒。接口配置集中在下方 APIS 与 CHAINS，可自行增删排序。
+ * @version 1.3.0
  * @author Qoder
  * @support tx wy kw kg
  */
@@ -16,7 +16,7 @@ const DEV_ENABLE = false
 const LOG = true
 
 // 当前脚本版本（与头部 @version 保持一致）
-const SCRIPT_VERSION = '1.2.0'
+const SCRIPT_VERSION = '1.3.0'
 // 版本自检：依次尝试这些 version.json 地址（raw 无缓存优先），任一成功即停止；失败不影响正常使用
 const UPDATE_CHECK_URLS = [
   'https://raw.githubusercontent.com/NIko-oo/lx-aggregate-source/main/version.json',
@@ -37,6 +37,10 @@ const HUIBQ_Q = { '128k': '128k', '320k': '320k', flac: '320k', flac24bit: '320k
 const CIALLO_YZ = { '128k': 1, '320k': 2, flac: 3, flac24bit: 4 }
 const OIAPI_KW_BR = { '128k': 7, '320k': 5, flac: 1, flac24bit: 1 }
 const CQ_KW_LEVEL = { '128k': 'standard', '320k': 'exhigh', flac: 'lossless', flac24bit: 'lossless' }
+// 酷我官方 mobi 接口的码率参数
+const MOBI_KW_BR = { '128k': '128kmp3', '320k': '320kmp3', flac: '2000kflac', flac24bit: '4000kflac' }
+// zddyr 聚合接口的平台名映射（tx 需卡密，不接入）
+const ZDDYR_SOURCE = { wy: 'netease', kg: 'kg', kw: 'kuwo' }
 
 const APIS = {
   // QQ音乐：cyapi，速度快，返回默认音质
@@ -84,14 +88,29 @@ const APIS = {
       url: `https://oiapi.net/api/Kuwo?msg=${encodeURIComponent((mi.name || '') + ' ' + (mi.singer || ''))}&n=1&br=${OIAPI_KW_BR[q] || 1}`,
     }),
   },
+  // zddyr 聚合（来自墨澜音源）：wy/kg/kw 备用，直连各平台 CDN，速度快；tx 需卡密不接入
+  zddyr: {
+    name: 'zddyr(备用)',
+    build: (s, id, q) => ({
+      url: `https://yy.zddyr.top/lx/api/?source=${ZDDYR_SOURCE[s] || s}&songmid=${id}&quality=${q}`,
+    }),
+  },
+  // 酷我官方 mobi 接口（来自墨澜音源）：kw 备用，返回 data.surl，需移动端 UA
+  mobiKuwo: {
+    name: '酷我官方mobi',
+    build: (s, id, q) => ({
+      url: `https://mobi.kuwo.cn/mobi.s?f=web&rid=${id}&br=${MOBI_KW_BR[q] || '320kmp3'}&source=jiakong&type=convert_url_with_sign&surl=1`,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Mobile Safari/537.36' },
+    }),
+  },
 }
 
 // 每个平台的接口尝试顺序（从前到后，命中即返回）
 const CHAINS = {
   tx: ['cyapi', 'huibq'],
-  wy: ['ciallo', 'ikun', 'oiapi163', 'huibq'],
-  kw: ['ikun', 'huibq', 'changqingKw', 'oiapiKuwo'],
-  kg: ['ikun', 'huibq'],
+  wy: ['ciallo', 'ikun', 'oiapi163', 'zddyr', 'huibq'],
+  kw: ['ikun', 'huibq', 'changqingKw', 'mobiKuwo', 'zddyr', 'oiapiKuwo'],
+  kg: ['ikun', 'zddyr', 'huibq'],
 }
 
 // 各平台对外声明支持的音质
@@ -107,11 +126,11 @@ const SOURCE_NAMES = { tx: 'QQ音乐', wy: '网易云音乐', kw: '酷我音乐'
 const isUrl = u => typeof u === 'string' && /^https?:\/\//.test(u.trim())
 
 // 统一从多种响应结构里提取播放链接：
-// body.url / body.data.url / body.data(字符串) / body.music / body.musicInfo / body.data[0].url / 纯文本URL
+// body.url / body.data.url / body.data.surl / body.data(字符串) / body.music / body.musicInfo / body.data[0].url / 纯文本URL
 const pickUrl = body => {
   if (typeof body === 'string') return isUrl(body) ? body.trim() : null
   if (!body || typeof body !== 'object') return null
-  const candidates = [body.url, body.data && body.data.url, body.data, body.music, body.musicInfo, Array.isArray(body.data) && body.data[0] && body.data[0].url]
+  const candidates = [body.url, body.data && body.data.url, body.data && body.data.surl, body.data, body.music, body.musicInfo, Array.isArray(body.data) && body.data[0] && body.data[0].url]
   for (const c of candidates) if (isUrl(c)) return c.trim()
   return null
 }
