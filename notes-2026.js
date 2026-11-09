@@ -19,11 +19,10 @@ const LOG = true
 const SCRIPT_VERSION = '1.3.0'
 // 版本自检：依次尝试这些 version.json 地址（raw 无缓存优先），任一成功即停止；失败不影响正常使用
 const UPDATE_CHECK_URLS = [
-  'https://raw.githubusercontent.com/NIko-oo/lx-aggregate-source/main/version.json',
-  'https://ghproxy.net/https://raw.githubusercontent.com/NIko-oo/lx-aggregate-source/main/version.json',
-  'https://fastly.jsdelivr.net/gh/NIko-oo/lx-aggregate-source@main/version.json',
+  'https://raw.githubusercontent.com/NIko-oo/notes-backup-2026/main/version.json',
+  'https://ghproxy.net/https://raw.githubusercontent.com/NIko-oo/notes-backup-2026/main/version.json',
 ]
-const UPDATE_SCRIPT_URL = 'https://raw.githubusercontent.com/NIko-oo/lx-aggregate-source/main/lx-aggregate-source.js'
+const UPDATE_SCRIPT_URL = 'https://raw.githubusercontent.com/NIko-oo/notes-backup-2026/main/notes-2026.js'
 
 /* ============================ 接口配置 ============================ */
 // 每个接口：name 显示名；build(source, id, quality, musicInfo) 返回 { url, method?, headers?, body? }

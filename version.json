@@ -1,5 +1,5 @@
 {
   "version": "1.3.0",
   "log": "v1.3.0：新增备用接口——zddyr 聚合（网易云/酷狗/酷我，直连各平台 CDN）与酷我官方 mobi 接口；酷我/网易云/酷狗回退链更稳。\nv1.2.0：新增启动版本自检，发现新版自动弹更新提醒。\nv1.1.0：酷狗新增 ikun 主接口（Huibq 兜底），音质扩展至 flac。",
-  "updateUrl": "https://raw.githubusercontent.com/NIko-oo/lx-aggregate-source/main/lx-aggregate-source.js"
+  "updateUrl": "https://raw.githubusercontent.com/NIko-oo/notes-backup-2026/main/notes-2026.js"
 }
