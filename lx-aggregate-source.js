@@ -1,0 +1,169 @@
+/*!
+ * @name 聚合音源-多接口自动切换
+ * @description 聚合多个实测可用的公益接口，按优先级自动切换、失败回退。支持 QQ/网易云/酷我/酷狗（酷狗双接口互备）。接口配置集中在下方 APIS 与 CHAINS，可自行增删排序。
+ * @version 1.1.0
+ * @author Qoder
+ * @support tx wy kw kg
+ */
+
+const { EVENT_NAMES, request, on, send } = globalThis.lx
+
+// 单次请求超时（毫秒）。某个接口卡住时，超过该时间自动切到下一个。
+const TIMEOUT = 12000
+const DEV_ENABLE = false
+
+// 是否打印命中日志（调试用）
+const LOG = true
+
+/* ============================ 接口配置 ============================ */
+// 每个接口：name 显示名；build(source, id, quality, musicInfo) 返回 { url, method?, headers?, body? }
+// 响应取链由统一的 pickUrl 处理，无需各接口单独写解析。
+
+// cyapi 的公开 key（来自「收集の聚合接口」，可按需替换）
+const CYAPI_KEY = '1ffdf5733f5d538760e63d7e46ba17438d9f7b9dfc18c51be1109386fd74c3a1'
+
+// 音质映射：LX 音质 -> 各接口自身参数
+const HUIBQ_Q = { '128k': '128k', '320k': '320k', flac: '320k', flac24bit: '320k' } // Huibq 最高 320k
+const CIALLO_YZ = { '128k': 1, '320k': 2, flac: 3, flac24bit: 4 }
+const OIAPI_KW_BR = { '128k': 7, '320k': 5, flac: 1, flac24bit: 1 }
+const CQ_KW_LEVEL = { '128k': 'standard', '320k': 'exhigh', flac: 'lossless', flac24bit: 'lossless' }
+
+const APIS = {
+  // QQ音乐：cyapi，速度快，返回默认音质
+  cyapi: {
+    name: 'cyapi(QQ)',
+    build: (s, id) => ({ url: `https://cyapi.top/API/qq_music.php?apikey=${CYAPI_KEY}&type=json&mid=${id}` }),
+  },
+  // 全平台兜底主干：tx/wy/kw/kg 均可，wy/kg 会跨平台用酷我后端解析（版权受限歌也能出链）
+  huibq: {
+    name: 'Huibq',
+    build: (s, id, q) => ({
+      url: `https://lxmusicapi.onrender.com/url/${s}/${id}/${HUIBQ_Q[q] || '320k'}`,
+      headers: { 'X-Request-Key': 'share-v3' },
+    }),
+  },
+  // ikun 公益：kw/wy/kg，支持高音质（网易云版权受限歌会返回空，自动回退）
+  ikun: {
+    name: 'ikun',
+    build: (s, id, q) => ({
+      url: 'https://c.wwwweb.top/music/url',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Api-Key': '' },
+      body: JSON.stringify({ source: s, musicId: id, quality: q }),
+    }),
+  },
+  // Ciallo：仅网易云，全音质
+  ciallo: {
+    name: 'Ciallo',
+    build: (s, id, q) => ({ url: `https://api.s0o1.com/API/wyy_music?id=${id}&yz=${CIALLO_YZ[q] || 3}` }),
+  },
+  // 溯音网易云
+  oiapi163: {
+    name: '溯音163',
+    build: (s, id) => ({ url: `https://oiapi.net/api/Music_163?id=${id}` }),
+  },
+  // 长青酷我模板：直接返回播放链接文本
+  changqingKw: {
+    name: '长青酷我',
+    build: (s, id, q) => ({ url: `https://musicapi.haitangw.net/music/kw.php?id=${id}&level=${CQ_KW_LEVEL[q] || 'lossless'}` }),
+  },
+  // 溯音酷我：按歌名搜索匹配，精度略低，放最后兜底
+  oiapiKuwo: {
+    name: '溯音酷我(搜索)',
+    build: (s, id, q, mi) => ({
+      url: `https://oiapi.net/api/Kuwo?msg=${encodeURIComponent((mi.name || '') + ' ' + (mi.singer || ''))}&n=1&br=${OIAPI_KW_BR[q] || 1}`,
+    }),
+  },
+}
+
+// 每个平台的接口尝试顺序（从前到后，命中即返回）
+const CHAINS = {
+  tx: ['cyapi', 'huibq'],
+  wy: ['ciallo', 'ikun', 'oiapi163', 'huibq'],
+  kw: ['ikun', 'huibq', 'changqingKw', 'oiapiKuwo'],
+  kg: ['ikun', 'huibq'],
+}
+
+// 各平台对外声明支持的音质
+const QUALITYS = {
+  tx: ['128k', '320k'],
+  wy: ['128k', '320k', 'flac', 'flac24bit'],
+  kw: ['128k', '320k', 'flac', 'flac24bit'],
+  kg: ['128k', '320k', 'flac'],
+}
+const SOURCE_NAMES = { tx: 'QQ音乐', wy: '网易云音乐', kw: '酷我音乐', kg: '酷狗音乐' }
+
+/* ============================ 工具 ============================ */
+const isUrl = u => typeof u === 'string' && /^https?:\/\//.test(u.trim())
+
+// 统一从多种响应结构里提取播放链接：
+// body.url / body.data.url / body.data(字符串) / body.music / body.musicInfo / body.data[0].url / 纯文本URL
+const pickUrl = body => {
+  if (typeof body === 'string') return isUrl(body) ? body.trim() : null
+  if (!body || typeof body !== 'object') return null
+  const candidates = [body.url, body.data && body.data.url, body.data, body.music, body.musicInfo, Array.isArray(body.data) && body.data[0] && body.data[0].url]
+  for (const c of candidates) if (isUrl(c)) return c.trim()
+  return null
+}
+
+const httpFetch = (url, options = {}) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error('请求超时')), TIMEOUT)
+  request(url, { method: 'GET', timeout: TIMEOUT, ...options }, (err, resp) => {
+    clearTimeout(timer)
+    if (err) return reject(err)
+    resolve(resp)
+  })
+})
+
+// 从 musicInfo 里稳健地取出各平台歌曲 ID
+const getId = (source, mi) => {
+  const meta = mi.meta || {}
+  switch (source) {
+    case 'kg': return mi.hash || meta.hash || mi.songmid
+    case 'wy': return meta.songId || mi.songmid || mi.id
+    case 'kw': return mi.songmid || meta.songId || mi.id
+    case 'tx': return mi.songmid || meta.songmid || mi.id
+    default: return mi.songmid || mi.id
+  }
+}
+
+/* ============================ 核心 ============================ */
+const getMusicUrl = async (source, musicInfo, quality) => {
+  const id = String(getId(source, musicInfo) ?? '')
+  if (!id && source !== 'kw') throw new Error('缺少歌曲ID')
+  const chain = CHAINS[source] || []
+  const errs = []
+  for (const key of chain) {
+    const api = APIS[key]
+    if (!api) continue
+    try {
+      const req = api.build(source, id, quality, musicInfo)
+      const resp = await httpFetch(req.url, { method: req.method || 'GET', headers: req.headers, body: req.body })
+      const url = pickUrl(resp.body)
+      if (url) {
+        if (LOG) console.log(`[聚合音源] ${source}/${quality} 命中 ${api.name}`)
+        return url
+      }
+      errs.push(api.name + ':无链接')
+    } catch (e) {
+      errs.push(api.name + ':' + (e.message || e))
+    }
+  }
+  throw new Error(`所有接口失败(${source}/${quality}): ` + errs.join(' | '))
+}
+
+/* ============================ 注册 ============================ */
+const sources = {}
+for (const s of Object.keys(CHAINS)) {
+  sources[s] = { name: SOURCE_NAMES[s], type: 'music', actions: ['musicUrl'], qualitys: QUALITYS[s] }
+}
+
+on(EVENT_NAMES.request, ({ action, source, info }) => {
+  if (action !== 'musicUrl') return Promise.reject(new Error('不支持的 action: ' + action))
+  return getMusicUrl(source, info.musicInfo, info.type)
+})
+
+send(EVENT_NAMES.inited, {
+  openDevTools: DEV_ENABLE,
+  sources,
+})
