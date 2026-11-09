@@ -1,7 +1,7 @@
 /*!
  * @name 聚合音源-多接口自动切换
- * @description 聚合多个实测可用的公益接口，按优先级自动切换、失败回退。支持 QQ/网易云/酷我/酷狗（酷狗双接口互备）。接口配置集中在下方 APIS 与 CHAINS，可自行增删排序。
- * @version 1.1.0
+ * @description 聚合多个实测可用的公益接口，按优先级自动切换、失败回退。支持 QQ/网易云/酷我/酷狗（酷狗双接口互备）。启动时异步自检版本，有新版弹更新提醒。接口配置集中在下方 APIS 与 CHAINS，可自行增删排序。
+ * @version 1.2.0
  * @author Qoder
  * @support tx wy kw kg
  */
@@ -14,6 +14,16 @@ const DEV_ENABLE = false
 
 // 是否打印命中日志（调试用）
 const LOG = true
+
+// 当前脚本版本（与头部 @version 保持一致）
+const SCRIPT_VERSION = '1.2.0'
+// 版本自检：依次尝试这些 version.json 地址（raw 无缓存优先），任一成功即停止；失败不影响正常使用
+const UPDATE_CHECK_URLS = [
+  'https://raw.githubusercontent.com/NIko-oo/lx-aggregate-source/main/version.json',
+  'https://ghproxy.net/https://raw.githubusercontent.com/NIko-oo/lx-aggregate-source/main/version.json',
+  'https://fastly.jsdelivr.net/gh/NIko-oo/lx-aggregate-source@main/version.json',
+]
+const UPDATE_SCRIPT_URL = 'https://raw.githubusercontent.com/NIko-oo/lx-aggregate-source/main/lx-aggregate-source.js'
 
 /* ============================ 接口配置 ============================ */
 // 每个接口：name 显示名；build(source, id, quality, musicInfo) 返回 { url, method?, headers?, body? }
@@ -106,9 +116,9 @@ const pickUrl = body => {
   return null
 }
 
-const httpFetch = (url, options = {}) => new Promise((resolve, reject) => {
-  const timer = setTimeout(() => reject(new Error('请求超时')), TIMEOUT)
-  request(url, { method: 'GET', timeout: TIMEOUT, ...options }, (err, resp) => {
+const httpFetch = (url, options = {}, timeout = TIMEOUT) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error('请求超时')), timeout)
+  request(url, { method: 'GET', timeout, ...options }, (err, resp) => {
     clearTimeout(timer)
     if (err) return reject(err)
     resolve(resp)
@@ -152,6 +162,42 @@ const getMusicUrl = async (source, musicInfo, quality) => {
   throw new Error(`所有接口失败(${source}/${quality}): ` + errs.join(' | '))
 }
 
+/* ============================ 版本自检 ============================ */
+// 比较版本号，a > b 时返回 true
+const compareVersions = (a, b) => {
+  const pa = String(a).split('.').map(n => parseInt(n, 10) || 0)
+  const pb = String(b).split('.').map(n => parseInt(n, 10) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0, y = pb[i] || 0
+    if (x > y) return true
+    if (x < y) return false
+  }
+  return false
+}
+
+// 启动后异步检查更新；任何失败都静默跳过，绝不阻塞或影响取链
+const checkUpdate = async () => {
+  for (const url of UPDATE_CHECK_URLS) {
+    try {
+      const resp = await httpFetch(url, { method: 'GET' }, 8000)
+      const data = typeof resp.body === 'string' ? JSON.parse(resp.body) : resp.body
+      if (data && data.version) {
+        if (compareVersions(data.version, SCRIPT_VERSION)) {
+          send(EVENT_NAMES.updateAlert, {
+            log: `发现新版本 v${data.version}（当前 v${SCRIPT_VERSION}）\n\n${data.log || ''}`,
+            updateUrl: data.updateUrl || UPDATE_SCRIPT_URL,
+            confirmText: '立即更新',
+            cancelText: '暂不更新',
+          })
+        }
+        return
+      }
+    } catch (e) {
+      // 当前地址失败，尝试下一个
+    }
+  }
+}
+
 /* ============================ 注册 ============================ */
 const sources = {}
 for (const s of Object.keys(CHAINS)) {
@@ -167,3 +213,6 @@ send(EVENT_NAMES.inited, {
   openDevTools: DEV_ENABLE,
   sources,
 })
+
+// 初始化完成后异步检查更新（不阻塞取链）
+checkUpdate()
