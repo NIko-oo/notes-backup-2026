@@ -2,7 +2,7 @@
  * @name 聚合音源-多接口自动切换
  * @description 聚合多个实测可用的公益接口，按优先级自动切换、失败回退。支持 QQ/网易云/酷我/酷狗。v1.3 新增 zddyr 全平台备用与酷我官方 mobi 接口。启动时异步自检版本，有新版弹更新提醒。接口配置集中在下方 APIS 与 CHAINS，可自行增删排序。
  * @version 1.3.0
- * @author Qoder
+ * @author Niko
  * @support tx wy kw kg
  */
 
